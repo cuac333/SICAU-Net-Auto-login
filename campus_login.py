@@ -100,7 +100,7 @@ class CampusNetAutoLogin:
     def check_network(self):
         """检测网络是否已认证（访问外网判断）"""
         test_urls = ["https://www.jetbrains.com","https://www.bilibili.com"] #"https://www.bilibili.com"
-        timeout = 3  # 缩短超时时间
+        timeout = 3 
         for url in test_urls:
             try:
                 response = requests.head(url, timeout=timeout, verify=False)
@@ -147,7 +147,7 @@ class CampusNetAutoLogin:
                 data=login_data,
                 headers=headers,
                 verify=False,
-                timeout=15  # 增加超时时间
+                timeout=10
             )
             print(f"服务器响应状态码：{response.status_code}")
 
@@ -207,6 +207,7 @@ class CampusNetAutoLogin:
             print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 程序已手动停止")
         except Exception as e:
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 程序异常终止：{str(e)}")
+
     def start_input_listener(self):
         """启动输入监听线程"""
         def listen_for_input():
@@ -243,11 +244,9 @@ class CampusNetAutoLogin:
     def open_hotspot(self):
         """打开热点"""
         try:
-            # 执行open_hotspot.ps1脚本
             script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "open_hotspot.ps1")
-            result = subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", script_path], capture_output=True, text=True, check=True)
-            print(result.stdout.strip())
-            return "Hotspot is already On!" in result.stdout or "Hotspot is off! Turning it on" in result.stdout
+            subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", script_path], capture_output=True, check=True)
+            return True
         except Exception as e:
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 打开热点时出错: {e}")
             return False
@@ -255,10 +254,8 @@ class CampusNetAutoLogin:
     def close_hotspot(self):
         """关闭热点"""
         try:
-            # 执行close_hotspot.ps1脚本
             script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "close_hotspot.ps1")
-            result = subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", script_path], capture_output=True, text=True, check=True)
-            print(result.stdout.strip())
+            subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", script_path], capture_output=True, check=True)
             return True
         except Exception as e:
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 关闭热点时出错: {e}")
@@ -272,10 +269,10 @@ class CampusNetAutoLogin:
         
         if self.hotspot_keepalive:
             if not status:
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 热点未开启，正在尝试打开...")
+                print("热点未开启，正在尝试打开...",flush=True)
                 success = self.open_hotspot()
                 if success:
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 热点已成功打开！")
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 热点已成功打开✅！")
                 else:
                     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 打开热点失败，请检查脚本权限或网络设置。")
     
@@ -291,30 +288,11 @@ class CampusNetAutoLogin:
             return
         self.count += 1
 
-#废弃
-def add_to_startup():
-    """添加开机自启（Windows系统）"""
-    import winreg
-    try:
-        # 获取当前脚本路径
-        script_path = os.path.abspath(sys.argv[0])
-        # 注册表路径
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0,
-                             winreg.KEY_SET_VALUE)
-        # 添加开机启动项
-        winreg.SetValueEx(key, "CampusNetAutoLogin", 0, winreg.REG_SZ, f'python "{script_path}"')
-        winreg.CloseKey(key)
-        print("已添加开机自启！")
-    except Exception as e:
-        print(f"添加开机自启失败：{e}")
 
 
 if __name__ == "__main__":
     # 创建登录实例
     auto_login = CampusNetAutoLogin()
 
-    # 可选：添加开机自启（取消注释启用）
-    # add_to_startup()
-
-    # 运行监控程序（间隔5秒检测一次）
+    # 运行监控程序（间隔15秒检测一次）
     auto_login.run_monitor(interval=15)
