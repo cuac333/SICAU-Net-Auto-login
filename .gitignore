@@ -35,8 +35,15 @@ env/
 # Config with credentials
 campus_net.conf
 
+# Logs
+campus_login.log
+*.log
+
 # OS
 .DS_Store
 Thumbs.db
 # claude
 .claude/
+
+# codebuddy
+.codebuddy/

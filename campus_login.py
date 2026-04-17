@@ -14,6 +14,8 @@ import os
 import time
 import socket
 import threading
+import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 # 禁用SSL警告（校园网证书可能不规范）
 try:
@@ -31,6 +33,9 @@ class CampusNetAutoLogin:
         self.count = 0
         self.config = configparser.ConfigParser()
         self.load_config()
+
+        # 初始化日志系统
+        self._setup_logger()
 
         # 热点保活开关（从配置文件读取或首次运行时设置）
         self.auth_url = "https://portal.sicau.edu.cn/webauth.do"
@@ -61,6 +66,45 @@ class CampusNetAutoLogin:
         
         # 启动输入监听线程
         self.start_input_listener()
+
+    def _setup_logger(self):
+        """初始化日志系统：控制台(INFO) + 文件(DEBUG, 5MB轮转)"""
+        self.logger = logging.getLogger("CampusNetLogin")
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.handlers.clear()  # 避免重复添加
+
+        log_fmt = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+        # 控制台Handler - 仅显示INFO及以上
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(log_fmt)
+        self.logger.addHandler(console_handler)
+
+        # 文件Handler - DEBUG级别，5MB单文件，保留3个备份
+        log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "campus_login.log")
+        file_handler = RotatingFileHandler(
+            log_file, mode="a", maxBytes=5 * 1024 * 1024, backupCount=3,
+            encoding="utf-8"
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(log_fmt)
+        self.logger.addHandler(file_handler)
+
+    def _extract_error_msg(self, html_text):
+        """从HTML响应中提取可读的错误信息，返回简短中文描述或None"""
+        patterns = [
+            (["密码"], "密码可能错误"),
+            (["用户不存在", "用户名不存在"], "账号不存在"),
+            (["已在线", "already online", "alreadyOnline"], "账号已在其他设备在线"),
+            (["IP地址", "ipaddr", "IPADDR"], "IP地址异常"),
+            (["被禁", "禁用", "disabled"], "账号已被禁用"),
+        ]
+        text_lower = html_text.lower()
+        for keywords, desc in patterns:
+            if any(kw.lower() in text_lower for kw in keywords):
+                return desc
+        return None
 
     def load_config(self):
         """加载配置文件（账号密码）"""
@@ -120,12 +164,10 @@ class CampusNetAutoLogin:
     def login(self):
         """执行校园网登录"""
         try:
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 开始登录流程...")
-            
             # 更新动态参数
             self.base_params["wlanuserip"] = self.get_local_ip()
-            print(f"获取到本地IP：{self.base_params['wlanuserip']}")
-            
+            self.logger.debug(f"本地IP: {self.base_params['wlanuserip']}")
+
             # 构造登录表单数据
             login_data = {
                 **self.base_params,
@@ -141,7 +183,6 @@ class CampusNetAutoLogin:
                 "Content-Type": "application/x-www-form-urlencoded"
             }
 
-            print("正在发送登录请求...")
             response = requests.post(
                 self.auth_url,
                 data=login_data,
@@ -149,26 +190,31 @@ class CampusNetAutoLogin:
                 verify=False,
                 timeout=10
             )
-            print(f"服务器响应状态码：{response.status_code}")
+            self.logger.debug(f"服务器响应状态码: {response.status_code}")
 
             # 验证登录结果
-            print("正在验证登录状态...")
             if self.check_network():
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ 登录成功！")
+                self.logger.info("✅ 登录成功！")
                 return True
             else:
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ 登录失败")
-                print(f"服务器响应内容：{response.text[:500]}")
+                # 提取可读错误信息
+                error_msg = self._extract_error_msg(response.text)
+                if error_msg:
+                    self.logger.info(f"❌ 登录失败：{error_msg}")
+                else:
+                    self.logger.info("❌ 登录失败：服务器返回非预期响应")
+                # 完整HTML写入文件日志供排查
+                self.logger.debug(f"完整服务器响应:\n{response.text[:1000]}")
                 return False
 
         except requests.exceptions.Timeout:
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️  登录请求超时")
+            self.logger.warning("⚠️ 登录请求超时")
             return False
         except requests.exceptions.ConnectionError:
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️  网络连接错误")
+            self.logger.warning("⚠️ 网络连接错误")
             return False
         except Exception as e:
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ 登录异常：{str(e)}")
+            self.logger.error(f"❌ 登录异常：{str(e)}")
             return False
 
     def run_monitor(self, interval=30, fail_retry=3):
