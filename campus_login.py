@@ -60,7 +60,7 @@ class CampusNetAutoLogin:
             "logoutflag": "2",
             "scheme": "https",
             "serverIp": "portal.sicau.edu.cn:443",
-            "hostIp": "http://127.0.0.1:8446/",
+            "hostIp": "http://127.0.0.1:8443/",
             "distoken": "86e8c6548e872544104b898383b5d67d"
         }
         
@@ -126,7 +126,9 @@ class CampusNetAutoLogin:
             }
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 self.config.write(f)
-            print(f"账号密码已保存至：{CONFIG_FILE}")
+            # 设置配置文件为只读，防止误修改
+            os.chmod(CONFIG_FILE, 0o444)
+            print(f"账号密码已保存至：{CONFIG_FILE}（已设为只读）")
 
     def get_local_ip(self):
         """获取本机内网IP（对应wlanuserip参数）"""
@@ -188,7 +190,7 @@ class CampusNetAutoLogin:
                 data=login_data,
                 headers=headers,
                 verify=False,
-                timeout=10
+                timeout=15
             )
             self.logger.debug(f"服务器响应状态码: {response.status_code}")
 
@@ -198,13 +200,14 @@ class CampusNetAutoLogin:
                 return True
             else:
                 # 提取可读错误信息
-                error_msg = self._extract_error_msg(response.text)
-                if error_msg:
-                    self.logger.info(f"❌ 登录失败：{error_msg}")
-                else:
-                    self.logger.info("❌ 登录失败：服务器返回非预期响应")
+                # error_msg = self._extract_error_msg(response.text)
+                # if error_msg:
+                #     self.logger.info(f"❌ 登录失败：{error_msg}")
+                # else:
+                #     self.logger.info("❌ 登录失败：服务器返回非预期响应")
                 # 完整HTML写入文件日志供排查
-                self.logger.debug(f"完整服务器响应:\n{response.text[:1000]}")
+                self.logger.info(f"❌ 登录失败")
+                self.logger.debug(f"完整服务器响应:\n{response.text[:200000]}")
                 return False
 
         except requests.exceptions.Timeout:
