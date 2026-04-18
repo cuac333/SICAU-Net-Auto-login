@@ -92,18 +92,39 @@ class CampusNetAutoLogin:
         self.logger.addHandler(file_handler)
 
     def _extract_error_msg(self, html_text):
-        """从HTML响应中提取可读的错误信息，返回简短中文描述或None"""
-        patterns = [
-            (["密码"], "密码可能错误"),
-            (["用户不存在", "用户名不存在"], "账号不存在"),
-            (["已在线", "already online", "alreadyOnline"], "账号已在其他设备在线"),
-            (["IP地址", "ipaddr", "IPADDR"], "IP地址异常"),
-            (["被禁", "禁用", "disabled"], "账号已被禁用"),
-        ]
-        text_lower = html_text.lower()
-        for keywords, desc in patterns:
-            if any(kw.lower() in text_lower for kw in keywords):
-                return desc
+        """从HTML响应中提取原始错误信息，直接返回服务器返回的文本，不做映射
+        
+        针对 SICAU 校园网认证系统(portal.sicau.edu.cn)，错误信息存在于：
+        1. errMessage 隐藏域：<input id="errMessage" value="xxx"/>
+        2. command.errors JS变量：var s = '<span id="command.errors">xxx</span>'
+        3. common2 class div：<div class="common2">xxx</div>
+        """
+        import re
+        
+        # 1. 从 errMessage 隐藏域提取（最可靠）
+        # 例：<input id="errMessage" type="hidden" value="由于你登录失败次数较多,被禁用1分钟"/>
+        err_msg_match = re.search(r'<input[^>]*id=["\']errMessage["\'][^>]*value=["\']([^"\']*)["\']', html_text, re.IGNORECASE)
+        if err_msg_match:
+            raw_msg = err_msg_match.group(1).strip()
+            if raw_msg and raw_msg != "认证成功":
+                return raw_msg
+        
+        # 2. 从 command.errors span 提取
+        # 例：var s = '<span id="command.errors">由于你登录失败次数较多,被禁用1分钟</span>';
+        cmd_match = re.search(r'<span[^>]*id=["\']command\.errors["\'][^>]*>(.*?)</span>', html_text, re.IGNORECASE)
+        if cmd_match:
+            raw_msg = cmd_match.group(1).strip()
+            if raw_msg:
+                return raw_msg
+        
+        # 3. 从 common2 class div 提取
+        # 例：<div class="common2">认证成功 </div>
+        common2_match = re.search(r'<div[^>]*class=["\']common2["\'][^>]*>(.*?)</div>', html_text, re.IGNORECASE | re.DOTALL)
+        if common2_match:
+            raw_msg = common2_match.group(1).strip()
+            if raw_msg and raw_msg != "认证成功":
+                return raw_msg
+        
         return None
 
     def load_config(self):
@@ -199,15 +220,14 @@ class CampusNetAutoLogin:
                 self.logger.info("✅ 登录成功！")
                 return True
             else:
-                # 提取可读错误信息
-                # error_msg = self._extract_error_msg(response.text)
-                # if error_msg:
-                #     self.logger.info(f"❌ 登录失败：{error_msg}")
-                # else:
-                #     self.logger.info("❌ 登录失败：服务器返回非预期响应")
+                # 提取原始错误信息
+                error_msg = self._extract_error_msg(response.text)
+                if error_msg:
+                    self.logger.info(f"❌ 登录失败：{error_msg}")
+                else:
+                    self.logger.info("❌ 登录失败：服务器返回非预期响应")
                 # 完整HTML写入文件日志供排查
-                self.logger.info(f"❌ 登录失败")
-                self.logger.debug(f"完整服务器响应:\n{response.text[:200000]}")
+                self.logger.debug(f"完整服务器响应:\n{response.text[:2000]}")
                 return False
 
         except requests.exceptions.Timeout:
