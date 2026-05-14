@@ -33,6 +33,7 @@ class CampusNetAutoLogin:
         self.count = 0
         self.config = configparser.ConfigParser()
         self.load_config()
+        self.wifi_name = ''
 
         # 初始化日志系统
         self._setup_logger()
@@ -151,18 +152,50 @@ class CampusNetAutoLogin:
             os.chmod(CONFIG_FILE, 0o444)
             print(f"账号密码已保存至：{CONFIG_FILE}（已设为只读）")
 
+    def _is_proxy_ip(self, ip):
+        """检测IP是否属于已知代理/VPN虚拟网段"""
+        return ip.startswith("198.18.") or ip.startswith("198.19.")
+
     def get_local_ip(self):
         """获取本机内网IP（对应wlanuserip参数）"""
         try:
-            # 创建UDP连接获取本机IP
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
             local_ip = s.getsockname()[0]
             s.close()
-            return local_ip
+
+            if not self._is_proxy_ip(local_ip):
+                return local_ip
+
+            # 检测到代理虚拟IP，尝试从网络接口获取真实IP
+            self.logger.warning(f"检测到代理/VPN虚拟IP: {local_ip}，正在获取真实IP...")
         except Exception as e:
-            print(f"获取本机IP失败：{e}")
-            return "10.23.167.52"  # 使用默认IP
+            self.logger.warning(f"获取IP失败: {e}，尝试备用方法...")
+
+        # 备用：从WLAN连接信息获取真实IP
+        try:
+            cmd = (
+                "$p = Get-NetConnectionProfile -NetworkCategory Private -ErrorAction SilentlyContinue | "
+                "Select-Object -First 1; "
+                "if ($p) { "
+                "(Get-NetIPAddress -InterfaceIndex $p.InterfaceIndex -AddressFamily IPv4 "
+                "-ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress "
+                "} else { "
+                "(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.InterfaceAlias -match 'Wi-Fi|WLAN|无线' } | "
+                "Select-Object -First 1).IPAddress }"
+            )
+            result = subprocess.run(["powershell", "-Command", cmd],
+                                    capture_output=True, text=True, timeout=5)
+            real_ip = result.stdout.strip()
+            if real_ip and not self._is_proxy_ip(real_ip):
+                self.logger.info(f"已获取真实IP: {real_ip}")
+                return real_ip
+        except Exception:
+            pass
+
+        self.logger.error("无法获取真实IP，请关闭代理/VPN后重试")
+        return "10.23.167.52"
 
     def check_network(self):
         """检测网络是否已认证（访问外网判断）"""
@@ -330,15 +363,42 @@ class CampusNetAutoLogin:
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 关闭热点时出错: {e}")
             return False
     
+    def get_current_wifi_name(self):
+        """获取当前连接的WiFi名称"""
+        try:
+            cmd = "(Get-NetConnectionProfile).Name"
+            result = subprocess.run(["powershell", "-Command", cmd],
+                                    capture_output=True, text=True, check=True)
+            return result.stdout.strip()
+        except Exception as e:
+            self.logger.debug(f"获取WiFi名称失败: {e}")
+            return ""
+
+    def is_campus_wifi(self):
+        """判断当前是否连接到校园网WiFi"""
+        wifi_name = self.wifi_name = self.get_current_wifi_name()
+        # 校园网WiFi名称包含 i_sicau
+        return "i_sicau" in wifi_name.lower() if wifi_name else True  # 获取失败时默认允许
+
     def check_and_keep_hotspot(self):
-        """检查并保持热点开启"""
+        """检查并保持热点开启（仅在校园网环境下）"""
         # 每次执行都打印热点状态
         status = self.check_hotspot_status()
-        print(f"📶 热点: {'✅' if status else '❌'}；",end='',flush=True)
-        
+        print(f"📶 热点: {'✅' if status else '❌'}；", end='', flush=True)
+
         if self.hotspot_keepalive:
+            # 检测是否在校园网WiFi下
+            if not self.is_campus_wifi():
+                print(f"⚠️ 当前WiFi({self.wifi_name or '未知'})非校园网，关闭热点保活", flush=True)
+                self.hotspot_keepalive = False
+                # 如果热点开着，关闭它
+                if status:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 正在关闭热点...")
+                    self.close_hotspot()
+                return
+
             if not status:
-                print("热点未开启，正在尝试打开...",flush=True)
+                print("热点未开启，正在尝试打开...", flush=True)
                 success = self.open_hotspot()
                 if success:
                     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 热点已成功打开✅！")
