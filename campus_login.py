@@ -15,6 +15,7 @@ import time
 import socket
 import threading
 import logging
+import json
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 # 禁用SSL警告（校园网证书可能不规范）
@@ -167,12 +168,15 @@ class CampusNetAutoLogin:
             if not self._is_proxy_ip(local_ip):
                 return local_ip
 
-            # 检测到代理虚拟IP，尝试从网络接口获取真实IP
             self.logger.warning(f"检测到代理/VPN虚拟IP: {local_ip}，正在获取真实IP...")
         except Exception as e:
             self.logger.warning(f"获取IP失败: {e}，尝试备用方法...")
 
-        # 备用：从WLAN连接信息获取真实IP
+        real_ip = self.get_real_ip_from_powershell()
+        if real_ip:
+            self.logger.info(f"通过PowerShell脚本获取真实IP: {real_ip}")
+            return real_ip
+
         try:
             cmd = (
                 "$p = Get-NetConnectionProfile -NetworkCategory Private -ErrorAction SilentlyContinue | "
@@ -196,6 +200,40 @@ class CampusNetAutoLogin:
 
         self.logger.error("无法获取真实IP，请关闭代理/VPN后重试")
         return "10.23.167.52"
+
+    def get_real_ip_from_powershell(self):
+        """通过PowerShell脚本获取真实IP地址"""
+        try:
+            script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "get_real_ip.ps1")
+            result = subprocess.run(
+                ["powershell", "-ExecutionPolicy", "Bypass", "-File", script_path],
+                capture_output=True, text=True, timeout=10
+            )
+            
+            if result.returncode == 0:
+                output = result.stdout.strip()
+                if output:
+                    try:
+                        data = json.loads(output)
+                        if data.get("success") and data.get("ip"):
+                            ip = data["ip"]
+                            if not self._is_proxy_ip(ip):
+                                self.logger.debug(f"PowerShell脚本返回: 适配器={data.get('adapter')}, IP={ip}")
+                                return ip
+                            else:
+                                self.logger.warning(f"PowerShell返回的IP仍为代理IP: {ip}")
+                        else:
+                            self.logger.warning(f"PowerShell脚本返回失败: {data.get('message')}")
+                    except json.JSONDecodeError as e:
+                        self.logger.warning(f"解析PowerShell输出失败: {e}")
+            else:
+                self.logger.warning(f"PowerShell脚本执行失败: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            self.logger.warning("PowerShell脚本执行超时")
+        except Exception as e:
+            self.logger.warning(f"调用PowerShell脚本时出错: {e}")
+        
+        return None
 
     def check_network(self):
         """检测网络是否已认证（访问外网判断）"""
